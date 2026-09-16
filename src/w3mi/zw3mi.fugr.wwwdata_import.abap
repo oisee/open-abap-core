@@ -35,6 +35,10 @@ FUNCTION wwwdata_import.
   " Reuse w3obj directly
   WRITE '@KERNEL filename.set(w3obj.filename);'.
 
+* The host may supply bytes in a browser or compiled binary.
+  WRITE '@KERNEL if (typeof abap.W3MI_LOADER === "function") {'.
+  WRITE '@KERNEL   xstr.set(await abap.W3MI_LOADER(key.get().objid.get().trimEnd(), filename.get()));'.
+  WRITE '@KERNEL } else {'.
   WRITE '@KERNEL const fs = await import("fs");'.
   WRITE '@KERNEL const path = await import("path");'.
   WRITE '@KERNEL const url = await import("url");'.
@@ -49,6 +53,8 @@ FUNCTION wwwdata_import.
   WRITE '@KERNEL   root = parent;'.
   WRITE '@KERNEL }'.
   WRITE '@KERNEL xstr.set(fs.readFileSync(path.resolve(root, filename.get())).toString("hex").toUpperCase());'.
+
+  WRITE '@KERNEL }'.
 
 * walked with an offset: taking the remainder each time copies it, which
 * is quadratic, and a file of a few megabytes takes minutes
