@@ -435,10 +435,6 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     DATA c TYPE c LENGTH 1.
     DATA length TYPE i.
     DATA chars TYPE string VALUE '0123456789ABCDEF'.
-    IF raw NS '&'.
-      decoded = raw.
-      RETURN.
-    ENDIF.
     n = strlen( raw ).
     WHILE pos < n.
       IF raw+pos(1) <> '&'.
@@ -521,7 +517,9 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     DATA values TYPE STANDARD TABLE OF string WITH DEFAULT KEY.
     DATA lv_depth TYPE i.
     DATA length TYPE i.
-    DATA lv_trim TYPE string.
+    DATA only_space TYPE abap_bool.
+    DATA has_entity TYPE abap_bool.
+    DATA c TYPE c LENGTH 1.
     IF mv_done = abap_true.
       item-kind = if_sxml_node=>co_nt_final.
       RETURN.
@@ -664,7 +662,11 @@ CLASS lcl_xml_parser IMPLEMENTATION.
           ENDIF.
           mv_pos = mv_pos + 1.
           begin = mv_pos.
+          has_entity = abap_false.
           WHILE mv_pos < mv_length AND mv_source+mv_pos(1) <> quote.
+            IF mv_source+mv_pos(1) = '&'.
+              has_entity = abap_true.
+            ENDIF.
             mv_pos = mv_pos + 1.
           ENDWHILE.
           IF mv_pos = mv_length.
@@ -674,7 +676,9 @@ CLASS lcl_xml_parser IMPLEMENTATION.
           ENDIF.
           length = mv_pos - begin.
           attr_value = mv_source+begin(length).
-          attr_value = decode( attr_value ).
+          IF has_entity = abap_true.
+            attr_value = decode( attr_value ).
+          ENDIF.
           mv_pos = mv_pos + 1.
           IF attr_name = 'xmlns' OR ( strlen( attr_name ) >= 6 AND attr_name(6) = 'xmlns:' ).
             CLEAR binding.
@@ -738,19 +742,29 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         RETURN.
       ENDIF.
       begin = mv_pos.
-      FIND FIRST OCCURRENCE OF '<' IN SECTION OFFSET mv_pos OF mv_source
-        MATCH OFFSET mv_pos.
-      IF sy-subrc <> 0.
-        mv_pos = mv_length.
-      ENDIF.
+      only_space = abap_true.
+      has_entity = abap_false.
+      WHILE mv_pos < mv_length.
+        c = mv_source+mv_pos(1).
+        IF c = '<'.
+          EXIT.
+        ENDIF.
+        IF c <> space AND c <> cl_abap_char_utilities=>horizontal_tab
+            AND c <> cl_abap_char_utilities=>newline AND c <> cl_abap_char_utilities=>cr_lf(1).
+          only_space = abap_false.
+        ENDIF.
+        IF c = '&'.
+          has_entity = abap_true.
+        ENDIF.
+        mv_pos = mv_pos + 1.
+      ENDWHILE.
       IF mt_elements IS INITIAL.
 
         CONTINUE.
 
       ENDIF.
       length = mv_pos - begin.
-      name = mv_source+begin(length).
-      IF name IS INITIAL.
+      IF length = 0.
 
         CONTINUE.
 
@@ -760,13 +774,16 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         fail( '<EOF> reached' ).
 
       ENDIF.
-      lv_trim = name.
-      CONDENSE lv_trim NO-GAPS.
-      IF lv_trim IS INITIAL AND starts( '</' ) = abap_false.
+      IF only_space = abap_true AND starts( '</' ) = abap_false.
         CONTINUE.
       ENDIF.
       item-kind = if_sxml_node=>co_nt_value.
-      item-value = decode( name ).
+      name = mv_source+begin(length).
+      IF has_entity = abap_true.
+        item-value = decode( name ).
+      ELSE.
+        item-value = name.
+      ENDIF.
       RETURN.
     ENDWHILE.
     IF mt_elements IS NOT INITIAL.
@@ -829,6 +846,7 @@ CLASS lcl_reader IMPLEMENTATION.
     mv_json = iv_json.
     IF iv_json IS INITIAL OR iv_json(1) = '<'.
       CREATE OBJECT mo_xml EXPORTING source = iv_json.
+      CLEAR mv_json.
     ENDIF.
     mv_initialized = abap_false.
   ENDMETHOD.
@@ -910,6 +928,26 @@ CLASS lcl_reader IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD if_sxml_reader~next_node.
+    DATA xml TYPE lcl_xml_parser=>ty_item.
+    IF mo_xml IS BOUND.
+      xml = mo_xml->next( ).
+      if_sxml_reader~node_type = xml-kind.
+      IF xml-kind = if_sxml_node=>co_nt_final.
+        RETURN.
+      ENDIF.
+      if_sxml_reader~name = xml-name.
+      if_sxml_reader~prefix = xml-prefix.
+      if_sxml_reader~nsuri = xml-nsuri.
+      CLEAR mt_xml_attrs.
+      mv_xml_attr = 0.
+      IF xml-kind = if_sxml_node=>co_nt_element_open.
+        mt_xml_attrs = xml-attrs.
+      ELSEIF xml-kind = if_sxml_node=>co_nt_value.
+        if_sxml_reader~value = xml-value.
+        if_sxml_reader~value_type = if_sxml_value=>co_vt_text.
+      ENDIF.
+      RETURN.
+    ENDIF.
     if_sxml_reader~read_next_node( ).
   ENDMETHOD.
 
