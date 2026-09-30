@@ -312,6 +312,7 @@ CLASS lcl_xml_parser DEFINITION.
              local_name TYPE string,
              prefix     TYPE string,
              nsuri      TYPE string,
+             has_child  TYPE abap_bool,
            END OF ty_element.
     TYPES: BEGIN OF ty_binding,
              depth        TYPE i,
@@ -520,6 +521,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     DATA only_space TYPE abap_bool.
     DATA has_entity TYPE abap_bool.
     DATA c TYPE c LENGTH 1.
+    FIELD-SYMBOLS <parent> TYPE ty_element.
     IF mv_done = abap_true.
       item-kind = if_sxml_node=>co_nt_final.
       RETURN.
@@ -712,6 +714,11 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         element-local_name = local_name.
         element-prefix = prefix.
         element-nsuri = lookup( prefix ).
+        IF lv_depth > 1.
+          i = lv_depth - 1.
+          READ TABLE mt_elements INDEX i ASSIGNING <parent>.
+          <parent>-has_child = abap_true.
+        ENDIF.
         APPEND element TO mt_elements.
         LOOP AT names INTO attr_name.
           i = sy-tabix.
@@ -774,8 +781,14 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         fail( '<EOF> reached' ).
 
       ENDIF.
-      IF only_space = abap_true AND starts( '</' ) = abap_false.
-        CONTINUE.
+      IF only_space = abap_true.
+        IF starts( '</' ) = abap_false.
+          CONTINUE.
+        ENDIF.
+        READ TABLE mt_elements INDEX lines( mt_elements ) INTO element.
+        IF element-has_child = abap_true.
+          CONTINUE.
+        ENDIF.
       ENDIF.
       item-kind = if_sxml_node=>co_nt_value.
       name = mv_source+begin(length).

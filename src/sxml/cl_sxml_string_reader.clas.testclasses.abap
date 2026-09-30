@@ -712,6 +712,17 @@ CLASS ltcl_xml IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
       act = reader->node_type
       exp = if_sxml_node=>co_nt_element_open ).
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a><b/>  </a>' ) ).
+    reader->next_node( ).
+    reader->next_node( ).
+    reader->next_node( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->node_type
+      exp = if_sxml_node=>co_nt_element_close ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->name
+      exp = 'a' ).
   ENDMETHOD.
 
   METHOD nested_namespaces.
