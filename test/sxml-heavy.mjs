@@ -8,15 +8,17 @@ const shape = process.env.SXML_SHAPE === 'text' ? 'text' : 'elements';
 const fields = Array.from({length: 15}, (_, i) => {
   const tag = `f${i}`;
   const attr = i < 12 ? ` k="${i}"` : '';
-  const value = i === 3 ? 'A&amp;B' : i === 9 ? '<![CDATA[x&]]>' : 'v';
+  const value = i === 3 ? 'A&amp;B' : 'v';
   return `<${tag}${attr}>${value}</${tag}>`;
 }).join('');
 const record = `<record id="000000" status="active">${fields}</record>`;
+const cdataRecord = record.replace('<f9>v</f9>', '<f9><![CDATA[x&]]></f9>');
 const start = '<list xmlns="urn:sanctions">';
 const end = '</list>';
 const records = shape === 'text' ? 0 : Math.ceil((mib * 1048576 - start.length - end.length) / record.length);
 let xml = shape === 'text' ? '<r>' + 'a'.repeat(mib * 1048576 - 7) + '</r>'
-  : start + record.repeat(records) + end;
+  : start + (record.repeat(499) + cdataRecord).repeat(Math.floor(records / 500))
+    + record.repeat(records % 500) + end;
 const bytes = Buffer.byteLength(xml);
 const hex = Buffer.from(xml).toString('hex').toUpperCase();
 xml = undefined;
