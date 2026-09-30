@@ -15,8 +15,33 @@ CLASS cl_sxml_string_reader IMPLEMENTATION.
     DATA sample TYPE string.
     DATA sample_length TYPE i.
     DATA sample_bytes TYPE xstring.
+    DATA offset TYPE i.
+    DATA is_xml TYPE abap_bool.
+    DATA first_byte TYPE x LENGTH 1.
     bytes = input.
     IF xstrlen( bytes ) >= 3 AND bytes(3) = 'EFBBBF'.
+      is_xml = abap_true.
+    ELSEIF xstrlen( bytes ) >= 2 AND
+        ( bytes(2) = 'FFFE' OR bytes(2) = 'FEFF' ).
+      is_xml = abap_true.
+    ELSE.
+      WHILE offset < xstrlen( bytes ).
+        first_byte = bytes+offset(1).
+        IF first_byte = '20' OR first_byte = '09' OR
+            first_byte = '0A' OR first_byte = '0D'.
+          offset = offset + 1.
+        ELSE.
+          IF first_byte = '3C'.
+            is_xml = abap_true.
+          ENDIF.
+          EXIT.
+        ENDIF.
+      ENDWHILE.
+    ENDIF.
+
+    IF is_xml = abap_false.
+      decoded = cl_abap_codepage=>convert_from( input ).
+    ELSEIF xstrlen( bytes ) >= 3 AND bytes(3) = 'EFBBBF'.
       bytes = bytes+3.
     ELSEIF xstrlen( bytes ) >= 2 AND bytes(2) = 'FFFE'.
       bytes = bytes+2.
@@ -43,9 +68,11 @@ CLASS cl_sxml_string_reader IMPLEMENTATION.
         ENDIF.
       ENDIF.
     ENDIF.
-    cl_abap_conv_in_ce=>create( encoding = CONV #( encoding ) )->convert(
-      EXPORTING input = bytes
-      IMPORTING data  = decoded ).
+    IF is_xml = abap_true.
+      cl_abap_conv_in_ce=>create( encoding = CONV #( encoding ) )->convert(
+        EXPORTING input = bytes
+        IMPORTING data  = decoded ).
+    ENDIF.
     CREATE OBJECT reader TYPE lcl_reader
       EXPORTING
         iv_json = decoded.
