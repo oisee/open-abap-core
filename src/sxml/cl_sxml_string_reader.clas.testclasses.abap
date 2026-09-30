@@ -533,3 +533,155 @@ CLASS ltcl_json IMPLEMENTATION.
   ENDMETHOD.
 
 ENDCLASS.
+CLASS ltcl_xml DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT FINAL.
+  PRIVATE SECTION.
+    METHODS tokens FOR TESTING RAISING cx_static_check.
+    METHODS namespaces FOR TESTING RAISING cx_static_check.
+    METHODS errors FOR TESTING RAISING cx_static_check.
+    METHODS skip FOR TESTING RAISING cx_static_check.
+    METHODS scale FOR TESTING RAISING cx_static_check.
+ENDCLASS.
+
+CLASS ltcl_xml IMPLEMENTATION.
+  METHOD tokens.
+    DATA reader TYPE REF TO if_sxml_reader.
+    DATA node TYPE REF TO if_sxml_node.
+    DATA value TYPE REF TO if_sxml_value_node.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to(
+      '<?xml version="1.0"?><!--c--><a x="&amp;">t&amp;<![CDATA[<raw>&]]><b/></a><ignored/>' ) ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->name
+      exp = 'a' ).
+    reader->next_attribute( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->value
+      exp = '&' ).
+    node = reader->read_next_node( ).
+    value ?= node.
+    cl_abap_unit_assert=>assert_equals(
+      act = value->get_value( )
+      exp = 't&' ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->value
+      exp = '<raw>&' ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->name
+      exp = 'b' ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->node_type
+      exp = if_sxml_node=>co_nt_element_close ).
+    reader->next_node( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->node_type
+      exp = if_sxml_node=>co_nt_final ).
+  ENDMETHOD.
+
+  METHOD namespaces.
+    DATA reader TYPE REF TO if_sxml_reader.
+    DATA node TYPE REF TO if_sxml_node.
+    DATA open TYPE REF TO if_sxml_open_element.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to(
+      '<a xmlns="urn:a" xmlns:n="urn:n"><n:b n:z="&#65;&#x42;">  </n:b></a>' ) ).
+    node = reader->read_next_node( ).
+    open ?= node.
+    cl_abap_unit_assert=>assert_equals(
+      act = open->qname-namespace
+      exp = 'urn:a' ).
+    node = reader->read_next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->prefix
+      exp = 'n' ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->nsuri
+      exp = 'urn:n' ).
+    reader->next_attribute( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->name
+      exp = 'n:z' ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->value
+      exp = 'AB' ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = strlen( reader->value )
+      exp = 2 ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->nsuri
+      exp = 'urn:n' ).
+    cl_abap_unit_assert=>assert_equals(
+      act = strlen( reader->value )
+      exp = 2 ).
+  ENDMETHOD.
+
+  METHOD errors.
+    DATA reader TYPE REF TO if_sxml_reader.
+    DATA error TYPE REF TO cx_sxml_parse_error.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a><b></a>' ) ).
+    reader->next_node( ).
+    reader->next_node( ).
+    TRY.
+        reader->next_node( ).
+        cl_abap_unit_assert=>fail( ).
+      CATCH cx_sxml_parse_error INTO error.
+        cl_abap_unit_assert=>assert_equals(
+          act = error->error_text
+          exp = 'document not wellformed' ).
+    ENDTRY.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a>&bad;</a>' ) ).
+    reader->next_node( ).
+    TRY.
+        reader->next_node( ).
+        cl_abap_unit_assert=>fail( ).
+      CATCH cx_sxml_parse_error INTO error.
+        cl_abap_unit_assert=>assert_equals(
+          act = error->error_text
+          exp = 'unresolveable entity reference in content' ).
+    ENDTRY.
+  ENDMETHOD.
+
+  METHOD skip.
+    DATA reader TYPE REF TO if_sxml_reader.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a><b><c/></b><d/></a>' ) ).
+    reader->next_node( ).
+    reader->next_node( ).
+    reader->skip_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->name
+      exp = 'b' ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->node_type
+      exp = if_sxml_node=>co_nt_element_close ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->name
+      exp = 'd' ).
+  ENDMETHOD.
+
+  METHOD scale.
+    DATA xml TYPE string.
+    DATA reader TYPE REF TO if_sxml_reader.
+    DATA count TYPE i.
+    xml = '<a>'.
+    DO 100000 TIMES.
+      xml = xml && '<b>12345678</b>'.
+    ENDDO.
+    xml = xml && '</a>'.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( xml ) ).
+    DO.
+      reader->next_node( ).
+      IF reader->node_type = if_sxml_node=>co_nt_final.
+        EXIT.
+      ENDIF.
+      count = count + 1.
+    ENDDO.
+    cl_abap_unit_assert=>assert_equals(
+      act = count
+      exp = 300002 ).
+  ENDMETHOD.
+ENDCLASS.
