@@ -539,7 +539,10 @@ CLASS ltcl_xml DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT FINAL.
     METHODS namespaces FOR TESTING RAISING cx_static_check.
     METHODS errors FOR TESTING RAISING cx_static_check.
     METHODS skip FOR TESTING RAISING cx_static_check.
+    METHODS whitespace FOR TESTING RAISING cx_static_check.
+    METHODS nested_namespaces FOR TESTING RAISING cx_static_check.
     METHODS scale FOR TESTING RAISING cx_static_check.
+    METHODS scale10 FOR TESTING RAISING cx_static_check.
 ENDCLASS.
 
 CLASS ltcl_xml IMPLEMENTATION.
@@ -602,7 +605,7 @@ CLASS ltcl_xml IMPLEMENTATION.
     reader->next_attribute( ).
     cl_abap_unit_assert=>assert_equals(
       act = reader->name
-      exp = 'n:z' ).
+      exp = 'z' ).
     cl_abap_unit_assert=>assert_equals(
       act = reader->value
       exp = 'AB' ).
@@ -632,6 +635,9 @@ CLASS ltcl_xml IMPLEMENTATION.
         cl_abap_unit_assert=>assert_equals(
           act = error->error_text
           exp = 'document not wellformed' ).
+        cl_abap_unit_assert=>assert_equals(
+          act = error->get_text( )
+          exp = 'Error while parsing an XML stream: document not wellformed.' ).
     ENDTRY.
     reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a>&bad;</a>' ) ).
     reader->next_node( ).
@@ -643,6 +649,72 @@ CLASS ltcl_xml IMPLEMENTATION.
           act = error->error_text
           exp = 'unresolveable entity reference in content' ).
     ENDTRY.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a x=bad/>' ) ).
+    TRY.
+        reader->next_node( ).
+        cl_abap_unit_assert=>fail( ).
+      CATCH cx_sxml_parse_error INTO error.
+        cl_abap_unit_assert=>assert_equals(
+          act = error->error_text
+          exp = 'opening ''"'' or '''''' expected' ).
+    ENDTRY.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a>' ) ).
+    reader->next_node( ).
+    TRY.
+        reader->next_node( ).
+        cl_abap_unit_assert=>fail( ).
+      CATCH cx_sxml_parse_error INTO error.
+        cl_abap_unit_assert=>assert_equals(
+          act = error->error_text
+          exp = '<EOF> reached' ).
+    ENDTRY.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '' ) ).
+    TRY.
+        reader->next_node( ).
+        cl_abap_unit_assert=>fail( ).
+      CATCH cx_sxml_parse_error INTO error.
+        cl_abap_unit_assert=>assert_equals(
+          act = error->error_text
+          exp = 'BOM / charset detection failed' ).
+    ENDTRY.
+  ENDMETHOD.
+
+  METHOD whitespace.
+    DATA reader TYPE REF TO if_sxml_reader.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a><b/>  <c/></a>' ) ).
+    reader->next_node( ).
+    reader->next_node( ).
+    reader->next_node( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->name
+      exp = 'c' ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->node_type
+      exp = if_sxml_node=>co_nt_element_open ).
+  ENDMETHOD.
+
+  METHOD nested_namespaces.
+    DATA reader TYPE REF TO if_sxml_reader.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to(
+      '<r xmlns:n="urn:outer"><n:a xmlns:n="urn:inner" x=''v''/><n:b/></r>' ) ).
+    reader->next_node( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->nsuri
+      exp = 'urn:inner' ).
+    reader->next_attribute( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->name
+      exp = 'x' ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->nsuri
+      exp = '' ).
+    reader->next_node( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->nsuri
+      exp = 'urn:outer' ).
   ENDMETHOD.
 
   METHOD skip.
@@ -683,5 +755,22 @@ CLASS ltcl_xml IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
       act = count
       exp = 300002 ).
+  ENDMETHOD.
+
+  METHOD scale10.
+    DATA xml TYPE string.
+    DATA reader TYPE REF TO if_sxml_reader.
+    xml = '<r>' && repeat( val = 'a'
+                           occ = 10485760 ) && '</r>'.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( xml ) ).
+    reader->next_node( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = strlen( reader->value )
+      exp = 10485760 ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->node_type
+      exp = if_sxml_node=>co_nt_element_close ).
   ENDMETHOD.
 ENDCLASS.

@@ -308,9 +308,10 @@ CLASS lcl_xml_parser DEFINITION.
     METHODS next RETURNING VALUE(item) TYPE ty_item RAISING cx_sxml_parse_error.
   PRIVATE SECTION.
     TYPES: BEGIN OF ty_element,
-             name   TYPE string,
-             prefix TYPE string,
-             nsuri  TYPE string,
+             name       TYPE string,
+             local_name TYPE string,
+             prefix     TYPE string,
+             nsuri      TYPE string,
            END OF ty_element.
     TYPES: BEGIN OF ty_binding,
              depth  TYPE i,
@@ -342,7 +343,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     DATA error TYPE REF TO cx_sxml_parse_error.
     CREATE OBJECT error EXPORTING xml_offset = mv_pos.
     error->error_text = reason.
-    error->rawstring = 'Error while parsing an XML stream: ' && reason && '.'.
+    error->rawstring = 'Error while parsing an XML stream:' && | | && reason && '.'.
     RAISE EXCEPTION error.
   ENDMETHOD.
 
@@ -405,9 +406,15 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     DATA digit TYPE i.
     DATA base TYPE i.
     DATA entity TYPE string.
+    DATA part TYPE string.
+    DATA parts TYPE STANDARD TABLE OF string WITH DEFAULT KEY.
     DATA c TYPE c LENGTH 1.
     DATA length TYPE i.
     DATA chars TYPE string VALUE '0123456789ABCDEF'.
+    IF raw NS '&'.
+      decoded = raw.
+      RETURN.
+    ENDIF.
     n = strlen( raw ).
     WHILE pos < n.
       IF raw+pos(1) <> '&'.
@@ -416,7 +423,8 @@ CLASS lcl_xml_parser IMPLEMENTATION.
           pos = pos + 1.
         ENDWHILE.
         length = pos - begin.
-        decoded = decoded && raw+begin(length).
+        part = raw+begin(length).
+        APPEND part TO parts.
         CONTINUE.
       ENDIF.
       pos = pos + 1.
@@ -432,15 +440,15 @@ CLASS lcl_xml_parser IMPLEMENTATION.
       pos = pos + 1.
       CASE entity.
         WHEN 'amp'.
-          decoded = decoded && '&'.
+          part = '&'.
         WHEN 'lt'.
-          decoded = decoded && '<'.
+          part = '<'.
         WHEN 'gt'.
-          decoded = decoded && '>'.
+          part = '>'.
         WHEN 'quot'.
-          decoded = decoded && '"'.
+          part = '"'.
         WHEN 'apos'.
-          decoded = decoded && ''''.
+          part = ''''.
         WHEN OTHERS.
           IF entity(1) <> '#' OR strlen( entity ) < 2.
             fail( 'unresolveable entity reference in content' ).
@@ -462,9 +470,11 @@ CLASS lcl_xml_parser IMPLEMENTATION.
             code = code * base + digit.
             begin = begin + 1.
           ENDWHILE.
-          decoded = decoded && cl_abap_conv_in_ce=>uccpi( code ).
+          part = cl_abap_conv_in_ce=>uccpi( code ).
       ENDCASE.
+      APPEND part TO parts.
     ENDWHILE.
+    CONCATENATE LINES OF parts INTO decoded.
   ENDMETHOD.
 
   METHOD next.
@@ -475,6 +485,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     DATA attr_name TYPE string.
     DATA attr_value TYPE string.
     DATA prefix TYPE string.
+    DATA attr_nsuri TYPE string.
     DATA local_name TYPE string.
     DATA quote TYPE c LENGTH 1.
     DATA element TYPE ty_element.
@@ -494,7 +505,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
       mv_pending_close = abap_false.
       READ TABLE mt_elements INDEX lines( mt_elements ) INTO element.
       item-kind = if_sxml_node=>co_nt_element_close.
-      item-name = element-name.
+      item-name = element-local_name.
       item-prefix = element-prefix.
       item-nsuri = element-nsuri.
       lv_depth = lines( mt_elements ).
@@ -577,7 +588,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
 
         ENDIF.
         item-kind = if_sxml_node=>co_nt_element_close.
-        item-name = element-name.
+        item-name = element-local_name.
         item-prefix = element-prefix.
         item-nsuri = element-nsuri.
         DELETE mt_elements INDEX lv_depth.
@@ -657,8 +668,10 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         element-name = name.
         SPLIT name AT ':' INTO prefix local_name.
         IF local_name IS INITIAL.
+          local_name = name.
           CLEAR prefix.
         ENDIF.
+        element-local_name = local_name.
         element-prefix = prefix.
         element-nsuri = lookup( prefix ).
         APPEND element TO mt_elements.
@@ -667,28 +680,35 @@ CLASS lcl_xml_parser IMPLEMENTATION.
           READ TABLE values INDEX i INTO attr_value.
           SPLIT attr_name AT ':' INTO prefix local_name.
           IF local_name IS INITIAL.
+            local_name = attr_name.
             CLEAR prefix.
+          ENDIF.
+          CLEAR attr_nsuri.
+          IF prefix IS NOT INITIAL.
+            attr_nsuri = lookup( prefix ).
           ENDIF.
           CREATE OBJECT attribute TYPE lcl_attribute
             EXPORTING
-              name       = attr_name
+              name       = local_name
               prefix     = prefix
-              nsuri      = lookup( prefix )
+              nsuri      = attr_nsuri
               value      = attr_value
               value_type = if_sxml_value=>co_vt_text.
           APPEND attribute TO attrs.
         ENDLOOP.
         item-kind = if_sxml_node=>co_nt_element_open.
-        item-name = name.
+        item-name = element-local_name.
         item-prefix = element-prefix.
         item-nsuri = element-nsuri.
         item-attrs = attrs.
         RETURN.
       ENDIF.
       begin = mv_pos.
-      WHILE mv_pos < mv_length AND mv_source+mv_pos(1) <> '<'.
-        mv_pos = mv_pos + 1.
-      ENDWHILE.
+      FIND FIRST OCCURRENCE OF '<' IN SECTION OFFSET mv_pos OF mv_source
+        MATCH OFFSET mv_pos.
+      IF sy-subrc <> 0.
+        mv_pos = mv_length.
+      ENDIF.
       IF mt_elements IS INITIAL.
 
         CONTINUE.
