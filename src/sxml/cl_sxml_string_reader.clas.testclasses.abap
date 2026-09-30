@@ -45,6 +45,206 @@ CLASS ltcl_json DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT FINAL.
     METHODS read_next_node3 FOR TESTING RAISING cx_static_check.
 
 ENDCLASS.
+CLASS ltcl_xml_probe2 DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT FINAL.
+  PRIVATE SECTION.
+    METHODS error_at IMPORTING xml TYPE string reason TYPE string after_open TYPE abap_bool DEFAULT abap_false.
+    METHODS charrefs FOR TESTING RAISING cx_static_check.
+    METHODS attribute_values FOR TESTING RAISING cx_static_check.
+    METHODS names FOR TESTING RAISING cx_static_check.
+    METHODS prefixes FOR TESTING RAISING cx_static_check.
+    METHODS duplicates FOR TESTING RAISING cx_static_check.
+    METHODS encodings FOR TESTING RAISING cx_static_check.
+    METHODS document_edges FOR TESTING RAISING cx_static_check.
+    METHODS token_gaps FOR TESTING RAISING cx_static_check.
+ENDCLASS.
+
+CLASS ltcl_xml_probe2 IMPLEMENTATION.
+  METHOD error_at.
+    DATA reader TYPE REF TO if_sxml_reader.
+    DATA error TYPE REF TO cx_sxml_parse_error.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( xml ) ).
+    IF after_open = abap_true.
+      reader->next_node( ).
+      cl_abap_unit_assert=>assert_equals( act = reader->node_type
+                                          exp = if_sxml_node=>co_nt_element_open ).
+    ENDIF.
+    TRY.
+        reader->next_node( ).
+        cl_abap_unit_assert=>fail( ).
+      CATCH cx_sxml_parse_error INTO error.
+        cl_abap_unit_assert=>assert_equals( act = error->error_text
+                                            exp = reason ).
+    ENDTRY.
+  ENDMETHOD.
+
+  METHOD charrefs.
+    DATA reader TYPE REF TO if_sxml_reader.
+    error_at( xml        = '<a>&#x110000;</a>'
+              reason     = 'illegal charref value'
+              after_open = abap_true ).
+    error_at( xml        = '<a>&#xD800;</a>'
+              reason     = 'illegal charref value'
+              after_open = abap_true ).
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a>&#0;</a>' ) ).
+    reader->next_node( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->node_type
+                                        exp = if_sxml_node=>co_nt_value ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value
+                                        exp = cl_abap_conv_in_ce=>uccpi( 0 ) ).
+  ENDMETHOD.
+
+  METHOD attribute_values.
+    DATA reader TYPE REF TO if_sxml_reader.
+    DATA xml TYPE string.
+    xml = '<a x="1' && cl_abap_char_utilities=>horizontal_tab && '2'
+      && cl_abap_char_utilities=>newline && '3" y="&#9;&#10;" z="&quot;&apos;&gt;"/>'.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( xml ) ).
+    reader->next_node( ).
+    reader->next_attribute( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value
+      exp                                   = '1' && cl_abap_char_utilities=>horizontal_tab && '2' && cl_abap_char_utilities=>newline && '3' ).
+    reader->next_attribute( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value
+      exp                                   = cl_abap_char_utilities=>horizontal_tab && cl_abap_char_utilities=>newline ).
+    reader->next_attribute( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value
+                                        exp = '"''>' ).
+    error_at( xml    = '<a x="a<b"/>'
+              reason = 'closing ''"'' expected' ).
+  ENDMETHOD.
+
+  METHOD names.
+    DATA reader TYPE REF TO if_sxml_reader.
+    error_at( xml    = '<1a/>'
+              reason = 'invalid character after ''<''' ).
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a.b-c1/>' ) ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->name
+                                        exp = 'a.b-c1' ).
+  ENDMETHOD.
+
+  METHOD prefixes.
+    DATA reader TYPE REF TO if_sxml_reader.
+    error_at( xml    = '<p:a/>'
+              reason = 'undeclared namespace prefix' ).
+    error_at( xml    = '<a p:x="1"/>'
+              reason = 'undeclared namespace prefix' ).
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a xml:lang="en"/>' ) ).
+    reader->next_node( ).
+    reader->next_attribute( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->prefix
+                                        exp = 'xml' ).
+    cl_abap_unit_assert=>assert_equals( act = reader->nsuri
+                                        exp = 'http://www.w3.org/XML/1998/namespace' ).
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<xml:a/>' ) ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->nsuri
+                                        exp = 'http://www.w3.org/XML/1998/namespace' ).
+  ENDMETHOD.
+
+  METHOD duplicates.
+    DATA reader TYPE REF TO if_sxml_reader.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to(
+      '<a xmlns:p="urn:first" xmlns:p="urn:second" x="1" x="2"/>' ) ).
+    reader->next_node( ).
+    reader->next_attribute( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->name
+                                        exp = 'x' ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value
+                                        exp = '1' ).
+    reader->next_attribute( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->name
+                                        exp = 'x' ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value
+                                        exp = '2' ).
+    reader->next_attribute( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->node_type
+                                        exp = if_sxml_node=>co_nt_final ).
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to(
+      '<a xmlns:p="urn:first" xmlns:p="urn:second"><p:b/></a>' ) ).
+    reader->next_node( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->nsuri
+                                        exp = 'urn:second' ).
+  ENDMETHOD.
+
+  METHOD encodings.
+    DATA reader TYPE REF TO if_sxml_reader.
+    reader = cl_sxml_string_reader=>create( CONV xstring( 'EFBBBF3C612F3E' ) ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->name
+                                        exp = 'a' ).
+    reader = cl_sxml_string_reader=>create( CONV xstring( 'FFFE3C0061002F003E00' ) ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->name
+                                        exp = 'a' ).
+    reader = cl_sxml_string_reader=>create( CONV xstring( 'FEFF003C0061002F003E' ) ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->name
+                                        exp = 'a' ).
+    reader = cl_sxml_string_reader=>create( CONV xstring(
+      '3C3F786D6C2076657273696F6E3D22312E302220656E636F64696E673D2269736F2D383835392D31223F3E3C613EE43C2F613E' ) ).
+    reader->next_node( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value
+                                        exp = cl_abap_conv_in_ce=>uccpi( 228 ) ).
+  ENDMETHOD.
+
+  METHOD document_edges.
+    DATA reader TYPE REF TO if_sxml_reader.
+    error_at( xml    = '<!DOCTYPE a><a/>'
+              reason = '''<!--'' or ''<![CDATA['' expected' ).
+    error_at( xml        = '<a><!--a--b--></a>'
+              reason     = '-- in comment'
+              after_open = abap_true ).
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<![CDATA[pre]]><a/>tail' ) ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->node_type
+                                        exp = if_sxml_node=>co_nt_value ).
+    cl_abap_unit_assert=>assert_equals( act = reader->name
+                                        exp = '' ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value
+                                        exp = 'pre' ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->name
+                                        exp = 'a' ).
+    reader->next_node( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->node_type
+                                        exp = if_sxml_node=>co_nt_final ).
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '  <a/>' ) ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->name
+                                        exp = 'a' ).
+  ENDMETHOD.
+
+  METHOD token_gaps.
+    DATA reader TYPE REF TO if_sxml_reader.
+    DATA node TYPE REF TO if_sxml_node.
+    DATA close TYPE REF TO if_sxml_close_element.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<a x="1">&amp;&lt;&gt;&quot;&apos;</a>' ) ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value_type
+                                        exp = 0 ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value_type
+                                        exp = 0 ).
+    reader->next_attribute( ).
+    reader->next_node( ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value
+                                        exp = '&<>"''' ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value_type
+                                        exp = if_sxml_value=>co_vt_text ).
+    node = reader->read_next_node( ).
+    close ?= node.
+    cl_abap_unit_assert=>assert_equals( act = node->type
+                                        exp = if_sxml_node=>co_nt_element_close ).
+    cl_abap_unit_assert=>assert_equals( act = close->qname-name
+                                        exp = 'a' ).
+    cl_abap_unit_assert=>assert_equals( act = reader->value
+                                        exp = '&<>"''' ).
+  ENDMETHOD.
+ENDCLASS.
 
 CLASS ltcl_json IMPLEMENTATION.
 

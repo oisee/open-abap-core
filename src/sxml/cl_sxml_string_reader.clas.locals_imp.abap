@@ -392,10 +392,18 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     ENDIF.
     length = mv_pos - begin.
     name = mv_source+begin(length).
+    c = name(1).
+    IF ( c >= '0' AND c <= '9' ) OR c = '.' OR c = '-'.
+      fail( 'invalid character after ''<''' ).
+    ENDIF.
   ENDMETHOD.
 
   METHOD lookup.
     DATA current TYPE if_sxml_named=>nsbinding.
+    IF prefix = 'xml'.
+      nsuri = 'http://www.w3.org/XML/1998/namespace'.
+      RETURN.
+    ENDIF.
     READ TABLE mt_current WITH TABLE KEY prefix = prefix INTO current.
     IF sy-subrc = 0.
       nsuri = current-nsuri.
@@ -488,14 +496,20 @@ CLASS lcl_xml_parser IMPLEMENTATION.
             IF sy-subrc <> 0 OR digit >= base.
               fail( 'unresolveable entity reference in content' ).
             ENDIF.
+            IF code > ( 1114111 - digit ) DIV base.
+              fail( 'illegal charref value' ).
+            ENDIF.
             code = code * base + digit.
             begin = begin + 1.
           ENDWHILE.
+          IF code > 1114111 OR ( code >= 55296 AND code <= 57343 ).
+            fail( 'illegal charref value' ).
+          ENDIF.
           part = cl_abap_conv_in_ce=>uccpi( code ).
       ENDCASE.
       APPEND part TO parts.
     ENDWHILE.
-    CONCATENATE LINES OF parts INTO decoded.
+    CONCATENATE LINES OF parts INTO decoded RESPECTING BLANKS.
   ENDMETHOD.
 
   METHOD next.
@@ -558,6 +572,9 @@ CLASS lcl_xml_parser IMPLEMENTATION.
       IF starts( '<!--' ) = abap_true.
         mv_pos = mv_pos + 4.
         WHILE mv_pos < mv_length AND starts( '-->' ) = abap_false.
+          IF starts( '--' ) = abap_true.
+            fail( '-- in comment' ).
+          ENDIF.
           mv_pos = mv_pos + 1.
         ENDWHILE.
         IF mv_pos = mv_length.
@@ -584,6 +601,9 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         item-value = mv_source+begin(length).
         mv_pos = mv_pos + 3.
         RETURN.
+      ENDIF.
+      IF starts( '<!' ) = abap_true.
+        fail( '''<!--'' or ''<![CDATA['' expected' ).
       ENDIF.
       IF starts( '</' ) = abap_true.
         mv_pos = mv_pos + 2.
@@ -666,6 +686,9 @@ CLASS lcl_xml_parser IMPLEMENTATION.
           begin = mv_pos.
           has_entity = abap_false.
           WHILE mv_pos < mv_length AND mv_source+mv_pos(1) <> quote.
+            IF mv_source+mv_pos(1) = '<'.
+              fail( 'closing ''"'' expected' ).
+            ENDIF.
             IF mv_source+mv_pos(1) = '&'.
               has_entity = abap_true.
             ENDIF.
@@ -714,6 +737,9 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         element-local_name = local_name.
         element-prefix = prefix.
         element-nsuri = lookup( prefix ).
+        IF prefix IS NOT INITIAL AND element-nsuri IS INITIAL.
+          fail( 'undeclared namespace prefix' ).
+        ENDIF.
         IF lv_depth > 1.
           i = lv_depth - 1.
           READ TABLE mt_elements INDEX i ASSIGNING <parent>.
@@ -731,6 +757,9 @@ CLASS lcl_xml_parser IMPLEMENTATION.
           CLEAR attr_nsuri.
           IF prefix IS NOT INITIAL.
             attr_nsuri = lookup( prefix ).
+            IF attr_nsuri IS INITIAL.
+              fail( 'undeclared namespace prefix' ).
+            ENDIF.
           ENDIF.
           CREATE OBJECT attribute TYPE lcl_attribute
             EXPORTING
@@ -856,8 +885,21 @@ CLASS lcl_reader IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD constructor.
+    DATA first TYPE i.
+    DATA size TYPE i.
+    DATA c TYPE c LENGTH 1.
     mv_json = iv_json.
-    IF iv_json IS INITIAL OR iv_json(1) = '<'.
+    size = strlen( iv_json ).
+    WHILE first < size.
+      c = iv_json+first(1).
+      IF c = space OR c = cl_abap_char_utilities=>newline OR c = cl_abap_char_utilities=>horizontal_tab
+          OR c = cl_abap_char_utilities=>cr_lf(1).
+        first = first + 1.
+      ELSE.
+        EXIT.
+      ENDIF.
+    ENDWHILE.
+    IF iv_json IS INITIAL OR ( first < size AND iv_json+first(1) = '<' ).
       CREATE OBJECT mo_xml EXPORTING source = iv_json.
       CLEAR mv_json.
     ENDIF.
