@@ -773,7 +773,7 @@ CLASS lcl_reader IMPLEMENTATION.
 
   METHOD constructor.
     mv_json = iv_json.
-    IF iv_json IS NOT INITIAL AND iv_json(1) = '<'.
+    IF iv_json IS INITIAL OR iv_json(1) = '<'.
       CREATE OBJECT mo_xml EXPORTING source = iv_json.
     ENDIF.
     mv_initialized = abap_false.

@@ -9,8 +9,12 @@ ENDCLASS.
 
 CLASS cl_sxml_string_reader IMPLEMENTATION.
   METHOD create.
+    DATA decoded TYPE string.
+    cl_abap_conv_in_ce=>create( encoding = 'UTF-8' )->convert(
+      EXPORTING input = input
+      IMPORTING data  = decoded ).
     CREATE OBJECT reader TYPE lcl_reader
       EXPORTING
-        iv_json = cl_abap_codepage=>convert_from( input ).
+        iv_json = decoded.
   ENDMETHOD.
 ENDCLASS.
