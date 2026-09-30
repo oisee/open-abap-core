@@ -314,9 +314,11 @@ CLASS lcl_xml_parser DEFINITION.
              nsuri      TYPE string,
            END OF ty_element.
     TYPES: BEGIN OF ty_binding,
-             depth  TYPE i,
-             prefix TYPE string,
-             nsuri  TYPE string,
+             depth        TYPE i,
+             prefix       TYPE string,
+             nsuri        TYPE string,
+             previous     TYPE string,
+             had_previous TYPE abap_bool,
            END OF ty_binding.
     DATA mv_source TYPE string.
     DATA mv_length TYPE i.
@@ -325,12 +327,14 @@ CLASS lcl_xml_parser DEFINITION.
     DATA mv_pending_close TYPE abap_bool.
     DATA mt_elements TYPE STANDARD TABLE OF ty_element WITH DEFAULT KEY.
     DATA mt_bindings TYPE STANDARD TABLE OF ty_binding WITH DEFAULT KEY.
+    DATA mt_current TYPE HASHED TABLE OF if_sxml_named=>nsbinding WITH UNIQUE KEY prefix.
     METHODS fail IMPORTING reason TYPE string RAISING cx_sxml_parse_error.
     METHODS starts IMPORTING needle TYPE string RETURNING VALUE(yes) TYPE abap_bool.
     METHODS take_name RETURNING VALUE(name) TYPE string RAISING cx_sxml_parse_error.
     METHODS whitespace.
     METHODS decode IMPORTING raw TYPE string RETURNING VALUE(decoded) TYPE string RAISING cx_sxml_parse_error.
     METHODS lookup IMPORTING prefix TYPE string RETURNING VALUE(nsuri) TYPE string.
+    METHODS restore IMPORTING depth TYPE i.
 ENDCLASS.
 
 CLASS lcl_xml_parser IMPLEMENTATION.
@@ -390,12 +394,32 @@ CLASS lcl_xml_parser IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD lookup.
+    DATA current TYPE if_sxml_named=>nsbinding.
+    READ TABLE mt_current WITH TABLE KEY prefix = prefix INTO current.
+    IF sy-subrc = 0.
+      nsuri = current-nsuri.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD restore.
     DATA binding TYPE ty_binding.
-    LOOP AT mt_bindings INTO binding.
-      IF binding-prefix = prefix.
-        nsuri = binding-nsuri.
+    DATA current TYPE if_sxml_named=>nsbinding.
+    DATA last TYPE i.
+    last = lines( mt_bindings ).
+    WHILE last > 0.
+      READ TABLE mt_bindings INDEX last INTO binding.
+      IF binding-depth <> depth.
+        EXIT.
       ENDIF.
-    ENDLOOP.
+      DELETE mt_bindings INDEX last.
+      DELETE TABLE mt_current WITH TABLE KEY prefix = binding-prefix.
+      IF binding-had_previous = abap_true.
+        current-prefix = binding-prefix.
+        current-nsuri = binding-previous.
+        INSERT current INTO TABLE mt_current.
+      ENDIF.
+      last = last - 1.
+    ENDWHILE.
   ENDMETHOD.
 
   METHOD decode.
@@ -490,6 +514,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     DATA quote TYPE c LENGTH 1.
     DATA element TYPE ty_element.
     DATA binding TYPE ty_binding.
+    DATA current TYPE if_sxml_named=>nsbinding.
     DATA attribute TYPE REF TO if_sxml_attribute.
     DATA attrs TYPE if_sxml_attribute=>attributes.
     DATA names TYPE STANDARD TABLE OF string WITH DEFAULT KEY.
@@ -510,7 +535,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
       item-nsuri = element-nsuri.
       lv_depth = lines( mt_elements ).
       DELETE mt_elements INDEX lv_depth.
-      DELETE mt_bindings WHERE depth = lv_depth.
+      restore( lv_depth ).
       IF mt_elements IS INITIAL.
         mv_done = abap_true.
       ENDIF.
@@ -592,7 +617,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         item-prefix = element-prefix.
         item-nsuri = element-nsuri.
         DELETE mt_elements INDEX lv_depth.
-        DELETE mt_bindings WHERE depth = lv_depth.
+        restore( lv_depth ).
         IF mt_elements IS INITIAL.
           mv_done = abap_true.
         ENDIF.
@@ -658,7 +683,16 @@ CLASS lcl_xml_parser IMPLEMENTATION.
               binding-prefix = attr_name+6.
             ENDIF.
             binding-nsuri = attr_value.
+            READ TABLE mt_current WITH TABLE KEY prefix = binding-prefix INTO current.
+            IF sy-subrc = 0.
+              binding-had_previous = abap_true.
+              binding-previous = current-nsuri.
+              DELETE TABLE mt_current WITH TABLE KEY prefix = binding-prefix.
+            ENDIF.
             APPEND binding TO mt_bindings.
+            current-prefix = binding-prefix.
+            current-nsuri = binding-nsuri.
+            INSERT current INTO TABLE mt_current.
           ELSE.
             APPEND attr_name TO names.
             APPEND attr_value TO values.
