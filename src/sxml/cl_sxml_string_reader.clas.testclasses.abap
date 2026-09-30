@@ -588,6 +588,8 @@ CLASS ltcl_xml IMPLEMENTATION.
     DATA reader TYPE REF TO if_sxml_reader.
     DATA node TYPE REF TO if_sxml_node.
     DATA open TYPE REF TO if_sxml_open_element.
+    DATA attr TYPE REF TO if_sxml_attribute.
+    DATA attrs TYPE if_sxml_attribute=>attributes.
     reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to(
       '<a xmlns="urn:a" xmlns:n="urn:n"><n:b n:z="&#65;&#x42;">  </n:b></a>' ) ).
     node = reader->read_next_node( ).
@@ -596,6 +598,18 @@ CLASS ltcl_xml IMPLEMENTATION.
       act = open->qname-namespace
       exp = 'urn:a' ).
     node = reader->read_next_node( ).
+    open ?= node.
+    attrs = open->get_attributes( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = lines( attrs )
+      exp = 1 ).
+    READ TABLE attrs INDEX 1 INTO attr.
+    cl_abap_unit_assert=>assert_equals(
+      act = attr->get_value( )
+      exp = 'AB' ).
+    cl_abap_unit_assert=>assert_equals(
+      act = attr->qname-namespace
+      exp = 'urn:n' ).
     cl_abap_unit_assert=>assert_equals(
       act = reader->prefix
       exp = 'n' ).
@@ -606,6 +620,12 @@ CLASS ltcl_xml IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
       act = reader->name
       exp = 'z' ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->prefix
+      exp = 'n' ).
+    cl_abap_unit_assert=>assert_equals(
+      act = reader->nsuri
+      exp = 'urn:n' ).
     cl_abap_unit_assert=>assert_equals(
       act = reader->value
       exp = 'AB' ).
