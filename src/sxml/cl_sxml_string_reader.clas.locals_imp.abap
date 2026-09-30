@@ -1045,21 +1045,21 @@ CLASS lcl_reader IMPLEMENTATION.
       CASE xml-kind.
         WHEN if_sxml_node=>co_nt_element_open.
           mt_xml_attrs = xml-attrs.
-          CREATE OBJECT node TYPE lcl_open_node
+          CREATE OBJECT node TYPE cl_sxml_open_element
             EXPORTING
               name       = xml-name
               prefix     = xml-prefix
               nsuri      = xml-nsuri
               attributes = xml-attrs.
         WHEN if_sxml_node=>co_nt_element_close.
-          CREATE OBJECT node TYPE lcl_close_node
+          CREATE OBJECT node TYPE cl_sxml_close_element
             EXPORTING
               name  = xml-name
               nsuri = xml-nsuri.
         WHEN if_sxml_node=>co_nt_value.
           if_sxml_reader~value = xml-value.
           if_sxml_reader~value_type = if_sxml_value=>co_vt_text.
-          CREATE OBJECT node TYPE lcl_value_node EXPORTING value = xml-value.
+          CREATE OBJECT node TYPE cl_sxml_value EXPORTING value = xml-value.
       ENDCASE.
       RETURN.
     ENDIF.

@@ -735,6 +735,7 @@ CLASS ltcl_json IMPLEMENTATION.
 ENDCLASS.
 CLASS ltcl_xml DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT FINAL.
   PRIVATE SECTION.
+    METHODS concrete_nodes FOR TESTING RAISING cx_static_check.
     METHODS tokens FOR TESTING RAISING cx_static_check.
     METHODS namespaces FOR TESTING RAISING cx_static_check.
     METHODS errors FOR TESTING RAISING cx_static_check.
@@ -746,6 +747,39 @@ CLASS ltcl_xml DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT FINAL.
 ENDCLASS.
 
 CLASS ltcl_xml IMPLEMENTATION.
+  METHOD concrete_nodes.
+    DATA reader TYPE REF TO if_sxml_reader.
+    DATA node TYPE REF TO if_sxml_node.
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to(
+      '<?xml version="1.0"?><c><?task run?>text</c>' ) ).
+    node = reader->read_next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = cl_abap_classdescr=>get_class_name( node )
+      exp = '\CLASS=CL_SXML_OPEN_ELEMENT' ).
+    node = reader->read_next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = cl_abap_classdescr=>get_class_name( node )
+      exp = '\CLASS=CL_SXML_VALUE' ).
+    node = reader->read_next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = cl_abap_classdescr=>get_class_name( node )
+      exp = '\CLASS=CL_SXML_CLOSE_ELEMENT' ).
+    node = reader->read_next_node( ).
+    cl_abap_unit_assert=>assert_initial( node ).
+
+    reader = cl_sxml_string_reader=>create( cl_abap_codepage=>convert_to( '<c></c>' ) ).
+    node = reader->read_next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = cl_abap_classdescr=>get_class_name( node )
+      exp = '\CLASS=CL_SXML_OPEN_ELEMENT' ).
+    node = reader->read_next_node( ).
+    cl_abap_unit_assert=>assert_equals(
+      act = cl_abap_classdescr=>get_class_name( node )
+      exp = '\CLASS=CL_SXML_CLOSE_ELEMENT' ).
+    node = reader->read_next_node( ).
+    cl_abap_unit_assert=>assert_initial( node ).
+  ENDMETHOD.
+
   METHOD tokens.
     DATA reader TYPE REF TO if_sxml_reader.
     DATA node TYPE REF TO if_sxml_node.
