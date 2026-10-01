@@ -304,7 +304,9 @@ CLASS lcl_xml_parser DEFINITION.
              value  TYPE string,
              attrs  TYPE if_sxml_attribute=>attributes,
            END OF ty_item.
-    METHODS constructor IMPORTING source TYPE string.
+    METHODS constructor IMPORTING source TYPE string OPTIONAL
+                                  bytes  TYPE xstring OPTIONAL
+                                  binary TYPE abap_bool DEFAULT abap_false.
     METHODS next RETURNING VALUE(item) TYPE ty_item RAISING cx_sxml_parse_error.
   PRIVATE SECTION.
     TYPES: BEGIN OF ty_element,
@@ -322,6 +324,12 @@ CLASS lcl_xml_parser DEFINITION.
              had_previous TYPE abap_bool,
            END OF ty_binding.
     DATA mv_source TYPE string.
+    " a UTF-8 document is kept as its bytes: the markup is ASCII and no byte
+    " of a multi-byte character is below 80, so '<', '>' and the quotes are
+    " found in the bytes, and only the names and values between them are
+    " decoded; positions are then bytes
+    DATA mv_bytes TYPE xstring.
+    DATA mv_binary TYPE abap_bool.
     DATA mv_length TYPE i.
     DATA mv_pos TYPE i.
     DATA mv_done TYPE abap_bool.
@@ -336,12 +344,66 @@ CLASS lcl_xml_parser DEFINITION.
     METHODS decode IMPORTING raw TYPE string RETURNING VALUE(decoded) TYPE string RAISING cx_sxml_parse_error.
     METHODS lookup IMPORTING prefix TYPE string RETURNING VALUE(nsuri) TYPE string.
     METHODS restore IMPORTING depth TYPE i.
+    TYPES ty_char TYPE c LENGTH 1.
+    METHODS at IMPORTING pos TYPE i RETURNING VALUE(c) TYPE ty_char.
+    METHODS piece IMPORTING begin TYPE i length TYPE i RETURNING VALUE(text) TYPE string.
+    METHODS seek IMPORTING sub TYPE string off TYPE i RETURNING VALUE(found) TYPE i.
 ENDCLASS.
 
 CLASS lcl_xml_parser IMPLEMENTATION.
   METHOD constructor.
+    IF binary = abap_true.
+      mv_binary = abap_true.
+      mv_bytes = bytes.
+      mv_length = xstrlen( bytes ).
+      RETURN.
+    ENDIF.
     mv_source = source.
     mv_length = strlen( source ).
+  ENDMETHOD.
+
+  METHOD at.
+    DATA byte TYPE x LENGTH 1.
+    DATA code TYPE i.
+    IF mv_binary = abap_false.
+      c = mv_source+pos(1).
+      RETURN.
+    ENDIF.
+    byte = mv_bytes+pos(1).
+    code = byte.
+    IF code < 128.
+      c = cl_abap_conv_in_ce=>uccpi( code ).
+    ELSE.
+      " part of a multi-byte character: never markup
+      c = 'x'.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD piece.
+    DATA part TYPE xstring.
+    IF mv_binary = abap_false.
+      text = mv_source+begin(length).
+      RETURN.
+    ENDIF.
+    IF length > 0.
+      part = mv_bytes+begin(length).
+      text = cl_abap_codepage=>convert_from( part ).
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD seek.
+    DATA needle TYPE xstring.
+    IF mv_binary = abap_false.
+      found = find( val = mv_source
+                    sub = sub
+                    off = off ).
+      RETURN.
+    ENDIF.
+    needle = cl_abap_codepage=>convert_to( sub ).
+    FIND needle IN SECTION OFFSET off OF mv_bytes IN BYTE MODE MATCH OFFSET found.
+    IF sy-subrc <> 0.
+      found = -1.
+    ENDIF.
   ENDMETHOD.
 
   METHOD fail.
@@ -354,16 +416,30 @@ CLASS lcl_xml_parser IMPLEMENTATION.
 
   METHOD starts.
     DATA n TYPE i.
+    DATA k TYPE i.
     n = strlen( needle ).
-    IF mv_pos + n <= mv_length AND mv_source+mv_pos(n) = needle.
-      yes = abap_true.
+    IF mv_pos + n > mv_length.
+      RETURN.
     ENDIF.
+    IF mv_binary = abap_false.
+      IF mv_source+mv_pos(n) = needle.
+        yes = abap_true.
+      ENDIF.
+      RETURN.
+    ENDIF.
+    WHILE k < n.
+      IF at( mv_pos + k ) <> needle+k(1).
+        RETURN.
+      ENDIF.
+      k = k + 1.
+    ENDWHILE.
+    yes = abap_true.
   ENDMETHOD.
 
   METHOD whitespace.
     DATA c TYPE c LENGTH 1.
     WHILE mv_pos < mv_length.
-      c = mv_source+mv_pos(1).
+      c = at( mv_pos ).
       CASE c.
         WHEN space OR cl_abap_char_utilities=>horizontal_tab
             OR cl_abap_char_utilities=>newline OR cl_abap_char_utilities=>cr_lf(1).
@@ -380,7 +456,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     DATA length TYPE i.
     begin = mv_pos.
     WHILE mv_pos < mv_length.
-      c = mv_source+mv_pos(1).
+      c = at( mv_pos ).
       IF c = space OR c = '/' OR c = '>' OR c = '=' OR c = '?' OR c = cl_abap_char_utilities=>newline
           OR c = cl_abap_char_utilities=>horizontal_tab OR c = cl_abap_char_utilities=>cr_lf(1).
         EXIT.
@@ -391,7 +467,8 @@ CLASS lcl_xml_parser IMPLEMENTATION.
       fail( 'document not wellformed' ).
     ENDIF.
     length = mv_pos - begin.
-    name = mv_source+begin(length).
+    name = piece( begin  = begin
+                  length = length ).
     c = name(1).
     IF ( c >= '0' AND c <= '9' ) OR c = '.' OR c = '-'.
       fail( 'invalid character after ''<''' ).
@@ -523,6 +600,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     DATA attr_nsuri TYPE string.
     DATA local_name TYPE string.
     DATA quote TYPE c LENGTH 1.
+    DATA quote_text TYPE string.
     DATA element TYPE ty_element.
     DATA binding TYPE ty_binding.
     DATA current TYPE if_sxml_named=>nsbinding.
@@ -563,15 +641,14 @@ CLASS lcl_xml_parser IMPLEMENTATION.
       " runs of text, comments and values are crossed with find( ) instead
       " of a character at a time
       CLEAR: c, c2.
-      c = mv_source+mv_pos(1).
+      c = at( mv_pos ).
       IF c = '<' AND mv_pos + 1 < mv_length.
         i = mv_pos + 1.
-        c2 = mv_source+i(1).
+        c2 = at( i ).
       ENDIF.
       IF c = '<' AND c2 = '?'.
         mv_pos = mv_pos + 2.
-        found = find( val = mv_source
-                      sub = '?>'
+        found = seek( sub = '?>'
                       off = mv_pos ).
         IF found < 0.
           mv_pos = mv_length.
@@ -584,8 +661,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         mv_pos = mv_pos + 4.
         " the first '--' ends the comment when it is '-->', and is an error
         " otherwise
-        found = find( val = mv_source
-                      sub = '--'
+        found = seek( sub = '--'
                       off = mv_pos ).
         IF found < 0.
           mv_pos = mv_length.
@@ -601,8 +677,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
       IF c2 = '!' AND starts( '<![CDATA[' ) = abap_true.
         mv_pos = mv_pos + 9.
         begin = mv_pos.
-        found = find( val = mv_source
-                      sub = ']]>'
+        found = seek( sub = ']]>'
                       off = mv_pos ).
         IF found < 0.
           mv_pos = mv_length.
@@ -611,7 +686,8 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         mv_pos = found.
         item-kind = if_sxml_node=>co_nt_value.
         length = mv_pos - begin.
-        item-value = mv_source+begin(length).
+        item-value = piece( begin  = begin
+                            length = length ).
         mv_pos = mv_pos + 3.
         RETURN.
       ENDIF.
@@ -691,18 +767,17 @@ CLASS lcl_xml_parser IMPLEMENTATION.
             fail( '<EOF> reached' ).
 
           ENDIF.
-          quote = mv_source+mv_pos(1).
+          quote = at( mv_pos ).
           IF quote <> '"' AND quote <> ''''.
             fail( 'opening ''"'' or '''''' expected' ).
           ENDIF.
           mv_pos = mv_pos + 1.
           begin = mv_pos.
-          found = find( val = mv_source
-                        sub = quote
+          quote_text = quote.
+          found = seek( sub = quote_text
                         off = mv_pos ).
           IF found < 0.
-            found = find( val = mv_source
-                          sub = '<'
+            found = seek( sub = '<'
                           off = mv_pos ).
             IF found >= 0.
               mv_pos = found.
@@ -712,7 +787,8 @@ CLASS lcl_xml_parser IMPLEMENTATION.
             fail( '<EOF> reached' ).
           ENDIF.
           length = found - begin.
-          attr_value = mv_source+begin(length).
+          attr_value = piece( begin  = begin
+                              length = length ).
           " searched in the value, never on through the document
           j = find( val = attr_value
                     sub = '<' ).
@@ -803,8 +879,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         RETURN.
       ENDIF.
       begin = mv_pos.
-      found = find( val = mv_source
-                    sub = '<'
+      found = seek( sub = '<'
                     off = mv_pos ).
       IF found < 0.
         mv_pos = mv_length.
@@ -812,7 +887,8 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         mv_pos = found.
       ENDIF.
       length = mv_pos - begin.
-      name = mv_source+begin(length).
+      name = piece( begin  = begin
+                    length = length ).
       spaces = ` ` && cl_abap_char_utilities=>horizontal_tab && cl_abap_char_utilities=>newline && cl_abap_char_utilities=>cr_lf(1).
       only_space = abap_false.
       IF name CO spaces.
@@ -874,7 +950,9 @@ CLASS lcl_reader DEFINITION.
     TYPES ty_nodes TYPE STANDARD TABLE OF REF TO if_sxml_node WITH DEFAULT KEY.
     METHODS constructor
       IMPORTING
-        iv_json TYPE string.
+        iv_json  TYPE string
+        iv_bytes TYPE xstring OPTIONAL
+        iv_utf8  TYPE abap_bool DEFAULT abap_false.
     INTERFACES if_sxml_reader.
   PRIVATE SECTION.
     METHODS initialize.
@@ -916,6 +994,14 @@ CLASS lcl_reader IMPLEMENTATION.
     DATA first TYPE i.
     DATA size TYPE i.
     DATA c TYPE c LENGTH 1.
+    IF iv_utf8 = abap_true.
+      CREATE OBJECT mo_xml
+        EXPORTING
+          bytes  = iv_bytes
+          binary = abap_true.
+      mv_initialized = abap_false.
+      RETURN.
+    ENDIF.
     mv_json = iv_json.
     size = strlen( iv_json ).
     WHILE first < size.
