@@ -535,6 +535,9 @@ CLASS lcl_xml_parser IMPLEMENTATION.
     DATA only_space TYPE abap_bool.
     DATA has_entity TYPE abap_bool.
     DATA c TYPE c LENGTH 1.
+    DATA c2 TYPE c LENGTH 1.
+    DATA found TYPE i.
+    DATA spaces TYPE string.
     FIELD-SYMBOLS <parent> TYPE ty_element.
     IF mv_done = abap_true.
       item-kind = if_sxml_node=>co_nt_final.
@@ -556,56 +559,66 @@ CLASS lcl_xml_parser IMPLEMENTATION.
       RETURN.
     ENDIF.
     WHILE mv_pos < mv_length.
-      IF starts( '<?' ) = abap_true.
+      " one look at the character after '<' decides the kind of markup, and
+      " runs of text, comments and values are crossed with find( ) instead
+      " of a character at a time
+      CLEAR: c, c2.
+      c = mv_source+mv_pos(1).
+      IF c = '<' AND mv_pos + 1 < mv_length.
+        i = mv_pos + 1.
+        c2 = mv_source+i(1).
+      ENDIF.
+      IF c = '<' AND c2 = '?'.
         mv_pos = mv_pos + 2.
-        WHILE mv_pos < mv_length AND starts( '?>' ) = abap_false.
-          mv_pos = mv_pos + 1.
-        ENDWHILE.
-        IF mv_pos = mv_length.
-
+        found = find( val = mv_source
+                      sub = '?>'
+                      off = mv_pos ).
+        IF found < 0.
+          mv_pos = mv_length.
           fail( '<EOF> reached' ).
-
         ENDIF.
-        mv_pos = mv_pos + 2.
+        mv_pos = found + 2.
         CONTINUE.
       ENDIF.
-      IF starts( '<!--' ) = abap_true.
+      IF c2 = '!' AND starts( '<!--' ) = abap_true.
         mv_pos = mv_pos + 4.
-        WHILE mv_pos < mv_length AND starts( '-->' ) = abap_false.
-          IF starts( '--' ) = abap_true.
-            fail( '-- in comment' ).
-          ENDIF.
-          mv_pos = mv_pos + 1.
-        ENDWHILE.
-        IF mv_pos = mv_length.
-
+        " the first '--' ends the comment when it is '-->', and is an error
+        " otherwise
+        found = find( val = mv_source
+                      sub = '--'
+                      off = mv_pos ).
+        IF found < 0.
+          mv_pos = mv_length.
           fail( '<EOF> reached' ).
-
+        ENDIF.
+        mv_pos = found.
+        IF starts( '-->' ) = abap_false.
+          fail( '-- in comment' ).
         ENDIF.
         mv_pos = mv_pos + 3.
         CONTINUE.
       ENDIF.
-      IF starts( '<![CDATA[' ) = abap_true.
+      IF c2 = '!' AND starts( '<![CDATA[' ) = abap_true.
         mv_pos = mv_pos + 9.
         begin = mv_pos.
-        WHILE mv_pos < mv_length AND starts( ']]>' ) = abap_false.
-          mv_pos = mv_pos + 1.
-        ENDWHILE.
-        IF mv_pos = mv_length.
-
+        found = find( val = mv_source
+                      sub = ']]>'
+                      off = mv_pos ).
+        IF found < 0.
+          mv_pos = mv_length.
           fail( '<EOF> reached' ).
-
         ENDIF.
+        mv_pos = found.
         item-kind = if_sxml_node=>co_nt_value.
         length = mv_pos - begin.
         item-value = mv_source+begin(length).
         mv_pos = mv_pos + 3.
         RETURN.
       ENDIF.
-      IF starts( '<!' ) = abap_true.
+      IF c2 = '!'.
         fail( '''<!--'' or ''<![CDATA['' expected' ).
       ENDIF.
-      IF starts( '</' ) = abap_true.
+      IF c = '<' AND c2 = '/'.
         mv_pos = mv_pos + 2.
         name = take_name( ).
         whitespace( ).
@@ -643,7 +656,7 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         ENDIF.
         RETURN.
       ENDIF.
-      IF starts( '<' ) = abap_true.
+      IF c = '<'.
         mv_pos = mv_pos + 1.
         name = take_name( ).
         CLEAR: attrs, names, values.
@@ -684,23 +697,35 @@ CLASS lcl_xml_parser IMPLEMENTATION.
           ENDIF.
           mv_pos = mv_pos + 1.
           begin = mv_pos.
-          has_entity = abap_false.
-          WHILE mv_pos < mv_length AND mv_source+mv_pos(1) <> quote.
-            IF mv_source+mv_pos(1) = '<'.
+          found = find( val = mv_source
+                        sub = quote
+                        off = mv_pos ).
+          IF found < 0.
+            found = find( val = mv_source
+                          sub = '<'
+                          off = mv_pos ).
+            IF found >= 0.
+              mv_pos = found.
               fail( 'closing ''"'' expected' ).
             ENDIF.
-            IF mv_source+mv_pos(1) = '&'.
-              has_entity = abap_true.
-            ENDIF.
-            mv_pos = mv_pos + 1.
-          ENDWHILE.
-          IF mv_pos = mv_length.
-
+            mv_pos = mv_length.
             fail( '<EOF> reached' ).
-
           ENDIF.
-          length = mv_pos - begin.
+          length = found - begin.
           attr_value = mv_source+begin(length).
+          " searched in the value, never on through the document
+          j = find( val = attr_value
+                    sub = '<' ).
+          IF j >= 0.
+            mv_pos = begin + j.
+            fail( 'closing ''"'' expected' ).
+          ENDIF.
+          mv_pos = found.
+          has_entity = abap_false.
+          IF find( val = attr_value
+                   sub = '&' ) >= 0.
+            has_entity = abap_true.
+          ENDIF.
           IF has_entity = abap_true.
             attr_value = decode( attr_value ).
           ENDIF.
@@ -778,22 +803,26 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         RETURN.
       ENDIF.
       begin = mv_pos.
-      only_space = abap_true.
+      found = find( val = mv_source
+                    sub = '<'
+                    off = mv_pos ).
+      IF found < 0.
+        mv_pos = mv_length.
+      ELSE.
+        mv_pos = found.
+      ENDIF.
+      length = mv_pos - begin.
+      name = mv_source+begin(length).
+      spaces = ` ` && cl_abap_char_utilities=>horizontal_tab && cl_abap_char_utilities=>newline && cl_abap_char_utilities=>cr_lf(1).
+      only_space = abap_false.
+      IF name CO spaces.
+        only_space = abap_true.
+      ENDIF.
       has_entity = abap_false.
-      WHILE mv_pos < mv_length.
-        c = mv_source+mv_pos(1).
-        IF c = '<'.
-          EXIT.
-        ENDIF.
-        IF c <> space AND c <> cl_abap_char_utilities=>horizontal_tab
-            AND c <> cl_abap_char_utilities=>newline AND c <> cl_abap_char_utilities=>cr_lf(1).
-          only_space = abap_false.
-        ENDIF.
-        IF c = '&'.
-          has_entity = abap_true.
-        ENDIF.
-        mv_pos = mv_pos + 1.
-      ENDWHILE.
+      IF find( val = name
+               sub = '&' ) >= 0.
+        has_entity = abap_true.
+      ENDIF.
       IF mt_elements IS INITIAL.
 
         CONTINUE.
@@ -820,7 +849,6 @@ CLASS lcl_xml_parser IMPLEMENTATION.
         ENDIF.
       ENDIF.
       item-kind = if_sxml_node=>co_nt_value.
-      name = mv_source+begin(length).
       IF has_entity = abap_true.
         item-value = decode( name ).
       ELSE.
