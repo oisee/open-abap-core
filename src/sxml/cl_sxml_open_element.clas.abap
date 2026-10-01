@@ -21,7 +21,15 @@ CLASS cl_sxml_open_element IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD if_sxml_open_element~get_attribute_value.
-    ASSERT 1 = 'todo'.
+    DATA attribute TYPE REF TO if_sxml_attribute.
+    LOOP AT mt_attributes INTO attribute.
+      IF attribute->qname-name = name AND attribute->qname-namespace = nsuri.
+        CREATE OBJECT value TYPE cl_sxml_value
+          EXPORTING
+            value = attribute->get_value( ).
+        RETURN.
+      ENDIF.
+    ENDLOOP.
   ENDMETHOD.
 
   METHOD if_sxml_open_element~get_attributes.
