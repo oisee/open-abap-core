@@ -33,7 +33,7 @@ CLASS cl_http_client DEFINITION PUBLIC CREATE PRIVATE.
   PRIVATE SECTION.
     DATA mv_host TYPE string.
     DATA mv_sent TYPE abap_bool.
-* the error of the last SEND, reported by RECEIVE and GET_LAST_ERROR
+* the error of the last exchange, reported by GET_LAST_ERROR
     DATA mv_error TYPE string.
     DATA mv_error_code TYPE i.
 
@@ -92,8 +92,9 @@ CLASS cl_http_client IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD if_http_client~close.
-* todo
-    RETURN.
+    WRITE '@KERNEL if (this.agent) {this.agent.destroy(); delete this.agent;}'.
+    WRITE '@KERNEL delete this.pendingRequest;'.
+    mv_sent = abap_false.
   ENDMETHOD.
 
   METHOD create_by_destination.
@@ -112,8 +113,6 @@ CLASS cl_http_client IMPLEMENTATION.
     DATA lv_method        TYPE string.
     DATA lv_url           TYPE string.
     DATA lv_xbody         TYPE xstring.
-    DATA lv_name          TYPE string.
-    DATA lv_value         TYPE string.
     DATA lv_content_type  TYPE string.
     DATA lv_xstr          TYPE xstring.
     DATA lt_form_fields   TYPE tihttpnvp.
@@ -122,21 +121,26 @@ CLASS cl_http_client IMPLEMENTATION.
     DATA lo_entity        TYPE REF TO cl_http_entity.
     DATA lv_error         TYPE string.
     DATA lv_error_code    TYPE i.
-    DATA lv_before_send   TYPE abap_bool.
+
+    IF mv_sent = abap_true.
+      RAISE http_invalid_state.
+    ENDIF.
 
     CLEAR mv_error.
     CLEAR mv_error_code.
-    mv_sent = abap_true.
+* clear the previous exchange, including headers used by gzip processing
+    lo_entity ?= if_http_client~response.
+    WRITE '@KERNEL lo_entity.get().mt_headers.clear();'.
+    WRITE '@KERNEL lo_entity.get().mv_content_type.clear();'.
+    if_http_client~response->set_data( lv_xstr ).
+    if_http_client~response->set_status( code   = 0
+                                         reason = '' ).
 
     IF timeout < -1.
+* retain a failed SEND for RECEIVE even though no request was constructed
+      mv_sent = abap_true.
       mv_error_code = 17.
       mv_error = 'Internal error. Handle for this http session was not found or is NULL.'.
-      lo_entity ?= if_http_client~response.
-      WRITE '@KERNEL lo_entity.get().mt_headers.clear();'.
-      WRITE '@KERNEL lo_entity.get().mv_content_type.clear();'.
-      if_http_client~response->set_data( lv_xstr ).
-      if_http_client~response->set_status( code   = 0
-                                           reason = '' ).
       RAISE http_invalid_timeout.
     ENDIF.
 
@@ -199,71 +203,80 @@ CLASS cl_http_client IMPLEMENTATION.
 
     WRITE '@KERNEL const https = await import("https");'.
     WRITE '@KERNEL const http = await import("http");'.
+* construct outside the promise executor so synchronous errors belong to SEND
     WRITE '@KERNEL function postData(url, options, requestBody, timeoutSeconds) {'.
-    WRITE '@KERNEL   return new Promise((resolve) => {'.
-    WRITE '@KERNEL     const reject = (error) => resolve({error});'.
-    WRITE '@KERNEL     const prot = url.startsWith("http://") ? http : https;'.
-    WRITE '@KERNEL     let req;'.
-    WRITE '@KERNEL     try {'.
-    WRITE '@KERNEL     req = prot.request(url, options,'.
-    WRITE '@KERNEL       (res) => {'.
-    WRITE '@KERNEL         let chunks = [];'.
-    WRITE '@KERNEL         res.on("data", (chunk) => {chunks.push(chunk);});'.
-    WRITE '@KERNEL         res.on("error", reject);'.
-    WRITE '@KERNEL         res.on("end", () => {'.
-*    WRITE '@KERNEL           console.dir(res.statusCode + " " + JSON.stringify(res.headers));'.
-*    WRITE '@KERNEL           if (res.statusCode >= 200 && res.statusCode <= 299) {'.
-    WRITE '@KERNEL             resolve({statusCode: res.statusCode, statusMessage: res.statusMessage, httpVersion: res.httpVersion, headers: res.headers, body: Buffer.concat(chunks)});'.
-*    WRITE '@KERNEL           } else {'.
-*    WRITE '@KERNEL             reject("Request failed. status: " + res.statusCode + ", body: " + Buffer.concat(chunks).toString());'.
-*    WRITE '@KERNEL           }'.
-    WRITE '@KERNEL         });'.
-    WRITE '@KERNEL       });'.
-* thrown here, nothing was sent yet: an invalid header, method or URL
-    WRITE '@KERNEL     } catch (error) { resolve({error, beforeSend: true}); return; }'.
-    WRITE '@KERNEL     req.on("error", reject);'.
-* setTimeout is an idle timeout; the callback must explicitly abort the request
-* set zero too, to clear the timeout on a socket reused by the keep-alive agent
+    WRITE '@KERNEL   let finish;'.
+* network errors fulfill the promise: an omitted RECEIVE cannot cause an unhandled rejection
+    WRITE '@KERNEL   const pending = new Promise(resolve => {finish = resolve;});'.
+    WRITE '@KERNEL   const fail = error => finish({error});'.
+    WRITE '@KERNEL   const prot = url.startsWith("http://") ? http : https;'.
+    WRITE '@KERNEL   const req = prot.request(url, options, res => {'.
+    WRITE '@KERNEL     const chunks = [];'.
+    WRITE '@KERNEL     res.on("data", chunk => chunks.push(chunk));'.
+    WRITE '@KERNEL     res.on("error", fail);'.
+    WRITE '@KERNEL     res.on("end", () => finish({statusCode: res.statusCode, statusMessage: res.statusMessage, httpVersion: res.httpVersion, headers: res.headers, body: Buffer.concat(chunks)}));'.
+    WRITE '@KERNEL   });'.
+    WRITE '@KERNEL   req.on("error", fail);'.
+* retain upstream's idle timeout, including zero to clear a reused socket's timeout
+    WRITE '@KERNEL   try {'.
     WRITE '@KERNEL     req.setTimeout(Math.max(0, timeoutSeconds) * 1000, () => {'.
     WRITE '@KERNEL       const error = new Error("Connection to partner timed out after " + timeoutSeconds + "s.");'.
     WRITE '@KERNEL       error.code = "ETIMEDOUT"; req.destroy(error);'.
     WRITE '@KERNEL     });'.
     WRITE '@KERNEL     req.write(requestBody);'.
     WRITE '@KERNEL     req.end();'.
-    WRITE '@KERNEL   });'.
+    WRITE '@KERNEL   } catch (error) {req.destroy(); throw error;}'.
+    WRITE '@KERNEL   return pending;'.
     WRITE '@KERNEL }'.
 
-    WRITE '@KERNEL const prot = lv_url.get().startsWith("http://") ? http : https;'.
-    WRITE '@KERNEL if (this.agent === undefined) {this.agent = new prot.Agent({keepAlive: true, maxSockets: 1});}'.
-    WRITE '@KERNEL let response = await postData(lv_url.get(), {method: lv_method.get(), headers: headers, agent: this.agent}, Buffer.from(lv_xbody.get(), "hex"), timeout.get());'.
-
-    " WRITE '@KERNEL console.dir(response);'.
-    " WRITE '@KERNEL console.dir(response.headers);'.
-
-    WRITE '@KERNEL if (response.error) {'.
-* on a dual-stack host a refused "localhost" is an AggregateError with an empty message
-    WRITE '@KERNEL   const e = response.error;'.
-    WRITE '@KERNEL   if (e.code === "ETIMEDOUT") lv_error_code.set(402);'.
+    WRITE '@KERNEL try {'.
+    WRITE '@KERNEL   const prot = lv_url.get().startsWith("http://") ? http : https;'.
+    WRITE '@KERNEL   if (this.agent === undefined) {this.agent = new prot.Agent({keepAlive: true, maxSockets: 1});}'.
+    WRITE '@KERNEL   this.pendingRequest = postData(lv_url.get(), {method: lv_method.get(), headers, agent: this.agent}, Buffer.from(lv_xbody.get(), "hex"), timeout.get());'.
+    WRITE '@KERNEL } catch (e) {'.
+    WRITE '@KERNEL   lv_error_code.set(1);'.
     WRITE '@KERNEL   lv_error.set(String(e.message || (e.errors || []).map(x => x.message).join("; ") || e.code || e));'.
-    WRITE '@KERNEL   if (response.beforeSend === true) lv_before_send.set("X");'.
     WRITE '@KERNEL }'.
     IF lv_error IS NOT INITIAL.
-* no response: a reused client must not show the previous one's status, fields or body
-      lo_entity ?= if_http_client~response.
-      WRITE '@KERNEL lo_entity.get().mt_headers.clear();'.
-      WRITE '@KERNEL lo_entity.get().mv_content_type.clear();'.
-      if_http_client~response->set_data( lv_xstr ).
-      if_http_client~response->set_status(
-        code   = 0
-        reason = '' ).
       mv_error = lv_error.
       mv_error_code = lv_error_code.
-* as on a system: a request that cannot be written fails SEND, a connection that fails fails RECEIVE
-      IF lv_before_send = abap_true.
-        mv_sent = abap_false.
-        RAISE http_communication_failure.
-      ENDIF.
-      RETURN.
+      RAISE http_communication_failure.
+    ENDIF.
+
+    mv_sent = abap_true.
+    sy-subrc = 0.
+  ENDMETHOD.
+
+  METHOD if_http_client~receive.
+    DATA lv_name       TYPE string.
+    DATA lv_value      TYPE string.
+    DATA lv_xstr       TYPE xstring.
+    DATA lo_entity     TYPE REF TO cl_http_entity.
+    DATA lv_error      TYPE string.
+    DATA lv_error_code TYPE i.
+
+    IF mv_sent = abap_false.
+      RAISE http_invalid_state.
+    ENDIF.
+
+* a rejected timeout has no pending promise; preserve its code and message
+    IF mv_error IS NOT INITIAL.
+      RAISE http_communication_failure.
+    ENDIF.
+
+    WRITE '@KERNEL const response = await this.pendingRequest;'.
+    WRITE '@KERNEL delete this.pendingRequest;'.
+    mv_sent = abap_false.
+    WRITE '@KERNEL if (response.error) {'.
+* on a dual-stack host a refused localhost can have an empty AggregateError message
+    WRITE '@KERNEL   const e = response.error;'.
+    WRITE '@KERNEL   lv_error_code.set(e.code === "ETIMEDOUT" ? 402 : 1);'.
+    WRITE '@KERNEL   lv_error.set(String(e.message || (e.errors || []).map(x => x.message).join("; ") || e.code || e));'.
+    WRITE '@KERNEL }'.
+    IF lv_error IS NOT INITIAL.
+      mv_error = lv_error.
+      mv_error_code = lv_error_code.
+      RAISE http_communication_failure.
     ENDIF.
 
     WRITE '@KERNEL for (const h in response.headers) {'.
@@ -312,25 +325,10 @@ CLASS cl_http_client IMPLEMENTATION.
 
   ENDMETHOD.
 
-  METHOD if_http_client~receive.
-* the request and its response are handled in send()
-    IF mv_sent = abap_false.
-      RAISE http_invalid_state.
-    ENDIF.
-    IF mv_error IS NOT INITIAL.
-      RAISE http_communication_failure.
-    ENDIF.
-
-    sy-subrc = 0.
-
-  ENDMETHOD.
-
   METHOD if_http_client~get_last_error.
     if_http_client~response->get_status( IMPORTING code = code ).
     IF mv_error IS NOT INITIAL.
-      IF mv_error_code <> 0.
-        code = mv_error_code.
-      ENDIF.
+      code = mv_error_code.
 * the message is Node's; a system answers the ICM's text and code, e.g. 411 for a refused connection
       message = mv_error.
     ELSE.
