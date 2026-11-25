@@ -105,9 +105,10 @@ CLASS cl_http_utility DEFINITION PUBLIC FRIENDS cl_http_server.
       RETURNING
         VALUE(escaped) TYPE string.
 
+    TYPES ty_byte TYPE x LENGTH 1.
     CLASS-METHODS hex_digit
       IMPORTING
-        byte         TYPE x
+        byte         TYPE ty_byte
       RETURNING
         VALUE(value) TYPE i.
 
